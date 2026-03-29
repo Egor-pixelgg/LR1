@@ -1,0 +1,160 @@
+#include <iostream>
+#include <vector>
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <chrono>
+#include <random>
+
+
+const size_t ARRAY_SIZE = 10000000;
+const std::vector<int> THREAD_COUNTS = { 1, 2, 4, 8 };
+
+
+std::vector<long long> generate_array() {
+    std::vector<long long> arr(ARRAY_SIZE);
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<long long> dist(1, 100);
+
+    for (auto& val : arr) {
+        val = dist(gen);
+    }
+    return arr;
+}
+
+
+long long atomic_sum(const std::vector<long long>& arr, int num_threads) {
+    std::atomic<long long> total_sum(0);
+    size_t chunk_size = ARRAY_SIZE / num_threads;
+
+    auto worker = [&](size_t start, size_t end) {
+        long long local_sum = 0;
+        for (size_t i = start; i < end; ++i) {
+            local_sum += arr[i];
+        }
+        total_sum.fetch_add(local_sum, std::memory_order_relaxed);
+        };
+
+    std::vector<std::thread> threads;
+    for (int t = 0; t < num_threads; ++t) {
+        size_t start = t * chunk_size;
+        size_t end = (t == num_threads - 1) ? ARRAY_SIZE : start + chunk_size;
+        threads.emplace_back(worker, start, end);
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    return total_sum.load();
+}
+
+
+long long mutex_sum(const std::vector<long long>& arr, int num_threads) {
+    long long total_sum = 0;
+    std::mutex mtx;
+    size_t chunk_size = ARRAY_SIZE / num_threads;
+
+    auto worker = [&](size_t start, size_t end) {
+        long long local_sum = 0;
+        for (size_t i = start; i < end; ++i) {
+            local_sum += arr[i];
+        }
+        std::lock_guard<std::mutex> lock(mtx);
+        total_sum += local_sum;
+        };
+
+    std::vector<std::thread> threads;
+    for (int t = 0; t < num_threads; ++t) {
+        size_t start = t * chunk_size;
+        size_t end = (t == num_threads - 1) ? ARRAY_SIZE : start + chunk_size;
+        threads.emplace_back(worker, start, end);
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    return total_sum;
+}
+
+
+long long unsafe_sum(const std::vector<long long>& arr, int num_threads) {
+    long long total_sum = 0;
+    size_t chunk_size = ARRAY_SIZE / num_threads;
+
+    auto worker = [&](size_t start, size_t end) {
+        for (size_t i = start; i < end; ++i) {
+            total_sum += arr[i]; // Race condition!
+        }
+        };
+
+    std::vector<std::thread> threads;
+    for (int t = 0; t < num_threads; ++t) {
+        size_t start = t * chunk_size;
+        size_t end = (t == num_threads - 1) ? ARRAY_SIZE : start + chunk_size;
+        threads.emplace_back(worker, start, end);
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    return total_sum;
+}
+
+
+template<typename Func>
+double measure_time(Func func) {
+    auto start = std::chrono::high_resolution_clock::now();
+    func();
+    auto end = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration<double>(end - start).count();
+}
+
+int main() {
+    auto arr = generate_array();
+
+    std::cout << "Размер массива: " << ARRAY_SIZE << " элементов\n";
+    std::cout << "Тестирование на " << THREAD_COUNTS.size() << " конфигурациях потоков\n\n";
+
+    long long expected_sum = 0;
+    for (const auto& val : arr) {
+        expected_sum += val;
+    }
+    std::cout << "Ожидаемая сумма: " << expected_sum << "\n\n";
+
+    for (int num_threads : THREAD_COUNTS) {
+        std::cout << "=== Потоки: " << num_threads << " ===\n";
+
+
+        double atomic_time = measure_time([&]() {
+            long long result = atomic_sum(arr, num_threads);
+            std::cout << "Atomic: " << result;
+            if (result != expected_sum) std::cout << " (ОШИБКА!)";
+            std::cout << "\n";
+            });
+        std::cout << "Время (atomic): " << atomic_time << " сек\n";
+
+
+        double mutex_time = measure_time([&]() {
+            long long result = mutex_sum(arr, num_threads);
+            std::cout << "Mutex: " << result;
+            if (result != expected_sum) std::cout << " (ОШИБКА!)";
+            std::cout << "\n";
+            });
+        std::cout << "Время (mutex): " << mutex_time << " сек\n";
+
+
+        double unsafe_time = measure_time([&]() {
+            long long result = unsafe_sum(arr, num_threads);
+            std::cout << "Без синхронизации: " << result;
+            if (result != expected_sum) std::cout << " (ОШИБКА!)";
+            std::cout << "\n";
+            });
+        std::cout << "Время (без sync): " << unsafe_time << " сек\n\n";
+    }
+
+    return 0;
+}
