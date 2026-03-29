@@ -1,0 +1,66 @@
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <boost/thread.hpp>
+#include <chrono>
+
+bool is_prime(int n) {
+    if (n < 2) return false;
+    if (n == 2) return true;
+    if (n % 2 == 0) return false;
+    int sqrt_n = static_cast<int>(std::sqrt(n));
+    for (int i = 3; i <= sqrt_n; i += 2) {
+        if (n % i == 0) return false;
+    }
+    return true;
+}
+
+void find_primes_in_range(int start, int end, std::vector<int>& local_primes) {
+    for (int num = start; num <= end; ++num) {
+        if (is_prime(num)) {
+            local_primes.push_back(num);
+        }
+    }
+}
+
+int main() {
+    const int N = 100000;
+    int K = 4;
+    std::vector<boost::thread> threads;
+    std::vector<std::vector<int>> primes_per_thread(K);
+    int range_size = N / K;
+
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    int total_primes = 0;
+    for (int i = 0; i < K; ++i) {
+        int start = i * range_size + 1;
+        int end = (i == K - 1) ? N : (start + range_size - 1);
+        threads.emplace_back(find_primes_in_range, start, end, std::ref(primes_per_thread[i]));
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    int total_primes_count = 0;
+    for (const auto& v : primes_per_thread) {
+        total_primes_count += v.size();
+    }
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> duration_multi = end_time - start_time;
+    std::cout << "Многопоточное время: " << duration_multi.count() << " сек\n";
+    std::cout << "Общее количество простых чисел: " << total_primes_count << "\n";
+
+
+    start_time = std::chrono::high_resolution_clock::now();
+    std::vector<int> simple_primes;
+    find_primes_in_range(1, N, simple_primes);
+    end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> duration_single = end_time - start_time;
+    std::cout << "Однопоточное время: " << duration_single.count() << " сек\n";
+
+    return 0;
+}
